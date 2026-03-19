@@ -69,7 +69,8 @@ if [ -n "$VERSION" ]; then
       UPGRADE_CMD="uvx --upgrade --from 'memsearch[onnx]' memsearch --version"
     else
       _MS_PATH=$(command -v memsearch 2>/dev/null || true)
-      if [[ "$_MS_PATH" == *"uv/tools"* ]]; then
+      _MS_REAL=$(readlink -f "$_MS_PATH" 2>/dev/null || echo "$_MS_PATH")
+      if [[ "$_MS_REAL" == *"uv/tools"* ]]; then
         UPGRADE_CMD="uv tool upgrade memsearch"
       else
         UPGRADE_CMD="pip install --upgrade memsearch"
