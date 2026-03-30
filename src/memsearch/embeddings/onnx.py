@@ -88,12 +88,12 @@ class OnnxEmbedding:
             if model_path is None:
                 raise FileNotFoundError("No cached ONNX model found")
             # Best-effort: cache the external data file too
-            try:
+            import contextlib
+
+            with contextlib.suppress(Exception):
                 hf_hub_download(
                     model, onnx_file + "_data", local_files_only=True
                 )
-            except Exception:
-                pass
             return tok_path, model_path
         except Exception:
             pass
