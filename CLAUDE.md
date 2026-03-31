@@ -52,6 +52,8 @@ Markdown files → Scanner → Chunker → Embedder → MilvusStore
 - **`cli.py`** — Click CLI wrapping the Python API. All commands resolve config via `resolve_config()` then instantiate `MemSearch`.
 - **`watcher.py`** — `watchdog`-based file watcher with debounce, used by `memsearch watch` and the Claude Code plugin.
 - **`compact.py`** — LLM-powered chunk summarization (OpenAI/Anthropic/Gemini).
+- **`reranker.py`** — Optional cross-encoder reranking (ONNX or PyTorch backend). Disabled by default; enable via `reranker.model` config.
+
 ### Claude Code Plugin (`plugins/claude-code/`)
 
 The plugin is a first-class component of memsearch — it's the primary real-world application that demonstrates the library in action. It gives Claude Code automatic persistent memory across sessions with zero user intervention.
@@ -107,41 +109,15 @@ When modifying hooks/skills, keep in mind:
 
 **Five independent version numbers** — bump only the ones that changed:
 
-| Component | Version file | Current | Publish channel |
-|-----------|-------------|---------|-----------------|
-| **memsearch** (PyPI) | `pyproject.toml` | 0.1.x | PyPI (automated via GitHub Actions) |
-| **Claude Code plugin** | `plugins/claude-code/.claude-plugin/plugin.json` | 0.2.x | Marketplace (`.claude-plugin/marketplace.json`) |
-| **OpenClaw plugin** | `plugins/openclaw/package.json` | 0.1.x | ClawHub (`clawhub package publish`) |
-| **OpenCode plugin** | `plugins/opencode/package.json` | 0.1.x | npm (`npm publish`, not yet published) |
-| **Codex CLI plugin** | *(none)* | — | `install.sh` (no version management) |
+| Component | Version file | Publish channel |
+|-----------|-------------|-----------------|
+| **memsearch** (PyPI) | `pyproject.toml` | PyPI (automated via GitHub Actions on tag push) |
+| **Claude Code plugin** | `plugins/claude-code/.claude-plugin/plugin.json` | Marketplace (`.claude-plugin/marketplace.json`) |
+| **OpenClaw plugin** | `plugins/openclaw/package.json` | ClawHub (`clawhub package publish`) |
+| **OpenCode plugin** | `plugins/opencode/package.json` | npm (`@zilliz/memsearch-opencode`) |
+| **Codex CLI plugin** | *(none)* | `install.sh` (no version management) |
 
-**memsearch (PyPI) release flow:**
-1. Bump `version` in `pyproject.toml`
-2. Commit and push
-3. Create a git tag matching the version: `git tag v0.1.14`
-4. Push the tag: `git push --tags`
-5. GitHub Actions (`release.yml`) automatically builds and publishes to PyPI
-
-**Claude Code plugin (Marketplace):**
-- Bump `version` in `plugins/claude-code/.claude-plugin/plugin.json` when hooks, skills, or plugin config change
-- Update `version` in `.claude-plugin/marketplace.json` to match
-- Users install: `/plugin marketplace add zilliztech/memsearch` then `/plugin install memsearch`
-- Dev/test: `claude --plugin-dir ./plugins/claude-code`
-
-**OpenClaw plugin (ClawHub):**
-- Bump `version` in `plugins/openclaw/package.json`
-- Publish: `clawhub package publish plugins/openclaw/ --family code-plugin --source-repo zilliztech/memsearch --source-commit <SHA> --source-path plugins/openclaw --source-ref main`
-- Users install: `openclaw plugins install clawhub:memsearch`
-- Requires `clawhub login` (token stored on publish machine)
-
-**OpenCode plugin (npm):**
-- Bump `version` in `plugins/opencode/package.json`
-- Publish: `cd plugins/opencode && npm publish --access public --otp=<code>`
-- Users install: `npm install @zilliz/memsearch-opencode` then symlink to `~/.config/opencode/plugins/`
-
-**Codex CLI plugin:**
-- No version file — users run `bash plugins/codex/scripts/install.sh` to install
-- No marketplace or registry
+See `CLAUDE.local.md` for detailed release procedures, current versions, and operational details.
 
 ## Project Conventions
 

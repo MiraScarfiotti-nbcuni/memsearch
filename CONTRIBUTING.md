@@ -82,7 +82,8 @@ src/memsearch/              # Core Python library
 ├── scanner.py              # File discovery (.md/.markdown)
 ├── config.py               # Layered TOML config system
 ├── watcher.py              # File watcher (watchdog-based, auto-index on change)
-└── compact.py              # LLM-powered chunk summarization
+├── compact.py              # LLM-powered chunk summarization
+└── reranker.py             # Optional cross-encoder reranking (ONNX/PyTorch)
 
 plugins/
 ├── claude-code/            # Claude Code plugin (shell hooks + SKILL.md)
