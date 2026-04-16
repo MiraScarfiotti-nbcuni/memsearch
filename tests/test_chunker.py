@@ -141,3 +141,101 @@ def test_clean_content_handles_adjacent_html_comments() -> None:
     assert "first comment" not in cleaned
     assert "second comment" not in cleaned
     assert cleaned == "Header\n\nBody text"
+
+
+# --- Sentence-boundary splitting for long text without line breaks ---
+#
+# The chunker falls back to sentence-level splitting when a paragraph is
+# longer than `max_chunk_size`. The tests below pin down the expected
+# behavior of `_SENTENCE_END_RE`:
+#   - CJK punctuation (fullwidth stop/exclaim/question/semicolon + ellipsis)
+#     always counts as a boundary.
+#   - ASCII punctuation (.!?;) only counts when followed by whitespace,
+#     end-of-string, or a CJK character -- so engineering text like emails,
+#     URLs, file extensions, and version numbers is not split mid-token.
+
+
+def test_long_cjk_text_splits_on_cjk_sentence_boundaries() -> None:
+    """Long Chinese text should split at CJK full-stop."""
+    sentence = "这是一个用于测试中文分句行为的长句子。"
+    text = sentence * 8
+
+    chunks = chunk_markdown(text, source="zh.md", max_chunk_size=40)
+
+    assert len(chunks) > 1
+    assert all(chunk.content.endswith("。") for chunk in chunks[:-1])
+    assert all(len(chunk.content) <= 40 for chunk in chunks)
+
+
+def test_long_mixed_text_prefers_sentence_boundaries() -> None:
+    """Mixed Chinese/English text still splits on sentence punctuation."""
+    sentence = "请检查 Redis cache 是否命中。Then verify the fallback path works!"
+    text = sentence * 5
+
+    chunks = chunk_markdown(text, source="mixed.md", max_chunk_size=45)
+
+    assert len(chunks) > 1
+    assert all(len(chunk.content) <= 45 for chunk in chunks)
+    # Each non-final chunk should end at a real sentence boundary.
+    assert all(chunk.content.endswith(("。", "!")) for chunk in chunks[:-1])
+
+
+def test_ascii_dot_in_engineering_text_is_not_a_boundary() -> None:
+    """Dots inside emails, URLs, file paths, and version numbers should not split."""
+    # Each token has ASCII dots immediately followed by non-whitespace, so the
+    # lookahead in _SENTENCE_END_RE should reject them as boundaries. The
+    # chunker is then forced to hard-split at max_chunk_size.
+    tokens = [
+        "user@example.com",
+        "https://foo.bar/baz",
+        "path/to/file.py",
+        "memsearch.config.toml",
+        "v1.2.3",
+    ]
+    text = " ".join(tokens * 8)
+
+    chunks = chunk_markdown(text, source="engineering.md", max_chunk_size=60)
+
+    assert len(chunks) > 1
+    # No chunk boundary should split any of these tokens in half.
+    joined = " || ".join(chunk.content for chunk in chunks)
+    for token in tokens:
+        assert token in joined, f"token {token!r} was broken across chunks"
+
+
+def test_ascii_dot_followed_by_space_is_a_boundary() -> None:
+    """Regular English sentences still split normally on `. ` / `! ` / `? `."""
+    sentence = "This is a complete sentence. And here is another one! Is this a question? "
+    text = sentence * 5
+
+    chunks = chunk_markdown(text, source="en.md", max_chunk_size=60)
+
+    assert len(chunks) > 1
+    assert all(len(chunk.content) <= 60 for chunk in chunks)
+    # Every non-final chunk should end at a sentence-ending punctuation.
+    assert all(chunk.content.rstrip().endswith((".", "!", "?")) for chunk in chunks[:-1])
+
+
+def test_long_cjk_text_splits_on_ellipsis() -> None:
+    """Chinese ellipsis (……) acts as a sentence boundary when splitting."""
+    sentence = "这个排查过程还没结束……但是系统已经记录了关键上下文……"
+    text = sentence * 4
+
+    chunks = chunk_markdown(text, source="ellipsis.md", max_chunk_size=35)
+
+    assert len(chunks) > 1
+    assert all(len(chunk.content) <= 35 for chunk in chunks)
+    assert all(chunk.content.endswith("……") for chunk in chunks[:-1])
+
+
+def test_long_cjk_text_splits_on_fullwidth_semicolon() -> None:
+    """Chinese fullwidth semicolon (U+FF1B) acts as a sentence boundary."""
+    semicolon = "\uff1b"
+    sentence = f"先检查缓存命中率{semicolon}再确认索引是否完成{semicolon}"
+    text = sentence * 5
+
+    chunks = chunk_markdown(text, source="semicolon.md", max_chunk_size=24)
+
+    assert len(chunks) > 1
+    assert all(len(chunk.content) <= 24 for chunk in chunks)
+    assert all(chunk.content.endswith(semicolon) for chunk in chunks[:-1])

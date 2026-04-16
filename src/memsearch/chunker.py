@@ -235,7 +235,14 @@ def _split_large_section(
 
 
 # Sentence-ending punctuation for splitting long text without line breaks.
-_SENTENCE_END_RE = re.compile(r"[。\uFF01\uFF1F.!?]\s*")
+# CJK punctuation (fullwidth stop/exclaim/question/semicolon + ellipsis)
+# always acts as a boundary. ASCII punctuation (.!?;) only counts when
+# followed by whitespace, end-of-string, or a CJK character -- so
+# `user@example.com`, `path/to/file.py`, `http://foo.bar`, and `v1.2.3`
+# are not split mid-token.
+_SENTENCE_END_RE = re.compile(
+    r"(?:……|…|[。\uFF01\uFF1F\uFF1B]\s*|[.!?;](?=\s|$|[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF])\s*)"
+)
 
 
 def _split_long_text(text: str, max_size: int) -> list[str]:
