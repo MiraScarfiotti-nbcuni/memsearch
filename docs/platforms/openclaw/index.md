@@ -2,6 +2,9 @@
 
 **Semantic memory for [OpenClaw](https://github.com/openclaw/openclaw) agents.** A TypeScript plugin with `kind: memory` that replaces OpenClaw's built-in memory-core with hybrid semantic search.
 
+[Browse on ClawHub](https://clawhub.ai/plugins/memsearch){ .md-button .md-button--primary }
+[Install](installation.md){ .md-button }
+
 ---
 
 ## Why memsearch over memory-core?

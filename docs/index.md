@@ -37,6 +37,7 @@ openclaw gateway restart
 Three tools (`memory_search`, `memory_get`, `memory_transcript`) with per-workspace isolation. Point an agent's workspace at a project directory to share memories with other platforms automatically.
 
 [:octicons-arrow-right-24: OpenClaw Plugin docs](platforms/openclaw/index.md){ .md-button .md-button--primary }
+[:octicons-arrow-right-24: Browse on ClawHub](https://clawhub.ai/plugins/memsearch){ .md-button }
 
 ### OpenCode Plugin
 

@@ -8,6 +8,8 @@
 
 ## Install from ClawHub (recommended)
 
+The plugin is published on [ClawHub](https://clawhub.ai/plugins/memsearch).
+
 ```bash
 # 1. Install the plugin
 openclaw plugins install clawhub:memsearch

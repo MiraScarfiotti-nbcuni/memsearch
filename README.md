@@ -70,6 +70,30 @@ We discussed Redis caching before, what was the TTL we chose?
 
 > 📖 [Claude Code Plugin docs](https://zilliztech.github.io/memsearch/platforms/claude-code/) · [Troubleshooting](https://zilliztech.github.io/memsearch/platforms/claude-code/troubleshooting/)
 
+### For Codex CLI Users
+
+```bash
+# Install
+bash memsearch/plugins/codex/scripts/install.sh
+codex --yolo  # needed for ONNX model network access
+```
+
+After installing, chat as usual. Hooks capture and summarize each turn.
+
+**Verify it's working:**
+
+```bash
+ls .memsearch/memory/
+```
+
+**Recall memories** — use the skill:
+
+```
+$memory-recall what did we discuss about deployment?
+```
+
+> 📖 [Codex CLI Plugin docs](https://zilliztech.github.io/memsearch/platforms/codex/)
+
 ### For OpenClaw Users
 
 ```bash
@@ -99,10 +123,9 @@ Or just ask naturally — the LLM auto-invokes memory tools when it senses the q
 We discussed batch size limits before, what did we decide?
 ```
 
-> 📖 [OpenClaw Plugin docs](https://zilliztech.github.io/memsearch/platforms/openclaw/)
+> 📖 [OpenClaw Plugin docs](https://zilliztech.github.io/memsearch/platforms/openclaw/) · [Browse on ClawHub](https://clawhub.ai/plugins/memsearch)
 
-<details>
-<summary><b>🔧 For OpenCode Users</b></summary>
+### For OpenCode Users
 
 ```json
 // In ~/.config/opencode/opencode.json
@@ -128,35 +151,6 @@ We discussed the authentication flow before, what was the approach?
 ```
 
 > 📖 [OpenCode Plugin docs](https://zilliztech.github.io/memsearch/platforms/opencode/)
-
-</details>
-
-<details>
-<summary><b>🔧 For Codex CLI Users</b></summary>
-
-```bash
-# Install
-bash memsearch/plugins/codex/scripts/install.sh
-codex --yolo  # needed for ONNX model network access
-```
-
-After installing, chat as usual. Hooks capture and summarize each turn.
-
-**Verify it's working:**
-
-```bash
-ls .memsearch/memory/
-```
-
-**Recall memories** — use the skill:
-
-```
-$memory-recall what did we discuss about deployment?
-```
-
-> 📖 [Codex CLI Plugin docs](https://zilliztech.github.io/memsearch/platforms/codex/)
-
-</details>
 
 ### ⚙️ Configuration (all platforms)
 
