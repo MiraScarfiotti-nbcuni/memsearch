@@ -1,31 +1,30 @@
 /**
- * memsearch GitHub Copilot CLI extension — persistent semantic memory across sessions.
+ * memsearch GitHub Copilot CLI extension — thin adapter over memsearch Codex CLI hooks.
  *
- * Provides:
- * - onSessionStart hook: inject recent memories as context, start background index
- * - onSessionEnd hook: capture session transcript → save to .memsearch/memory/
- * - memsearch_search tool: semantic search over past memories
- * - memsearch_expand tool: expand a chunk to full context
+ * Delegates all memory logic to the existing Codex CLI bash hook scripts:
+ *   onSessionStart       → ../codex/hooks/session-start.sh
+ *   onUserPromptSubmitted → ../codex/hooks/user-prompt-submit.sh
+ *   session.idle event   → ../codex/hooks/stop.sh  (per-turn, mirrors Codex Stop hook)
+ *
+ * The only JS-native code is the tool handlers (memsearch_search, memsearch_expand)
+ * which need to return values to the LLM, and the turn-tracking event listeners.
  *
  * Install: run plugins/copilot-cli/scripts/install.sh
  */
 
 import { joinSession } from "@github/copilot-sdk/extension";
 import { exec, execSync, spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-} from "node:fs";
+import { existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url));
+const CODEX_HOOKS = join(PLUGIN_DIR, "..", "codex", "hooks");
+const COPILOT_SCRIPTS = join(PLUGIN_DIR, "scripts");
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// Minimal helpers needed only for the JS tool handlers
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Detect the memsearch CLI command (PATH → uvx fallback). */
@@ -36,21 +35,18 @@ function detectMemsearchCmd() {
     if (r.status === 0) return "memsearch";
   } catch { /* ignore */ }
   const uvxPath = join(home, ".local", "bin", "uvx");
-  if (existsSync(uvxPath)) {
-    return `${uvxPath} --from 'memsearch[onnx]' memsearch`;
-  }
+  if (existsSync(uvxPath)) return `${uvxPath} --from 'memsearch[onnx]' memsearch`;
   try {
     const r = spawnSync("which", ["uvx"], { stdio: "pipe" });
     if (r.status === 0) return "uvx --from 'memsearch[onnx]' memsearch";
   } catch { /* ignore */ }
-  return "memsearch"; // best-effort fallback
+  return "memsearch";
 }
 
 /** Derive a per-project Milvus collection name via the shared script. */
 function deriveCollectionName(projectDir) {
-  const script = join(PLUGIN_DIR, "scripts", "derive-collection.sh");
   try {
-    return execSync(`bash "${script}" "${projectDir}"`, {
+    return execSync(`bash "${join(COPILOT_SCRIPTS, "derive-collection.sh")}" "${projectDir}"`, {
       encoding: "utf-8",
       timeout: 5000,
     }).trim();
@@ -59,90 +55,57 @@ function deriveCollectionName(projectDir) {
   }
 }
 
-/** Find the git root for a directory, or return the directory itself. */
-function findGitRoot(dir) {
-  try {
-    return execSync("git rev-parse --show-toplevel", {
-      cwd: dir,
-      encoding: "utf-8",
-      timeout: 3000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return dir;
-  }
-}
-
-/**
- * Return recent memory snippets (headings + bullets from 2 most recent daily files).
- * Used to inject context at session start without blocking on full indexing.
- */
-function getRecentMemories(memDir, count = 2, maxLinesPerFile = 40) {
-  if (!existsSync(memDir)) return "";
-  const files = readdirSync(memDir)
-    .filter((f) => f.endsWith(".md"))
-    .sort()
-    .slice(-count);
-  if (files.length === 0) return "";
-  const summary = [];
-  for (const file of files) {
-    try {
-      const content = readFileSync(join(memDir, file), "utf-8");
-      const lines = content
-        .split("\n")
-        .filter(
-          (l) =>
-            /^#{2,4}\s/.test(l) ||
-            l.startsWith("- ") ||
-            l.startsWith("[Human]") ||
-            l.startsWith("[Copilot]")
-        )
-        .slice(0, maxLinesPerFile);
-      if (lines.length > 0) summary.push(`[${file}]`, ...lines);
-    } catch { /* skip unreadable files */ }
-  }
-  if (summary.length === 0) return "";
-  return `Recent memories (use memsearch_search for full search):\n${summary.join("\n")}`;
-}
-
 /** Shell-escape a string for safe use inside single quotes. */
 function shellEscape(s) {
   return s.replace(/'/g, "'\\''");
 }
 
-/** Format a Unix timestamp (ms) as HH:MM:SS. */
-function formatTime(ts = Date.now()) {
-  return new Date(ts).toTimeString().slice(0, 8);
+/**
+ * Run a Codex hook script, optionally piping a JSON payload on stdin.
+ * Returns the parsed JSON output object (or {} on failure).
+ * session-start.sh discards stdin itself via `exec < /dev/null`.
+ */
+function runHook(script, stdinPayload, extraEnv = {}) {
+  return new Promise((resolve) => {
+    const child = exec(
+      `bash "${script}"`,
+      {
+        timeout: 35000,
+        env: {
+          ...process.env,
+          // Skip stdin read in common.sh when we have no payload to send
+          ...(stdinPayload ? {} : { MEMSEARCH_SKIP_HOOK_STDIN: "1" }),
+          ...extraEnv,
+        },
+      },
+      (_err, stdout) => {
+        try { resolve(JSON.parse(stdout || "{}")); } catch { resolve({}); }
+      }
+    );
+    if (stdinPayload) {
+      child.stdin.write(typeof stdinPayload === "string" ? stdinPayload : JSON.stringify(stdinPayload));
+    }
+    child.stdin.end();
+  });
 }
 
 /**
- * Write captured turns to today's daily memory file.
- * Format mirrors the Codex plugin: ## Session HH:MM → ### HH:MM:SS → [Human]/[Copilot]
+ * Write a minimal Codex-format JSONL rollout file from one user+assistant turn.
+ * stop.sh + parse-rollout.sh use this format for LLM summarization.
+ * stop.sh parses the file synchronously before going async, so it's safe
+ * to delete after stop.sh exits.
  */
-function saveSessionToMemory(turns, memDir) {
-  if (turns.length === 0) return;
-  try {
-    mkdirSync(memDir, { recursive: true });
-  } catch { /* ignore if exists */ }
-  const today = new Date().toISOString().slice(0, 10);
-  const memFile = join(memDir, `${today}.md`);
-  appendFileSync(memFile, `\n## Session ${formatTime()}\n`, "utf-8");
-  let i = 0;
-  while (i < turns.length) {
-    const turn = turns[i];
-    appendFileSync(memFile, `\n### ${formatTime(turn.ts)}\n`, "utf-8");
-    if (turn.role === "user") {
-      appendFileSync(memFile, `[Human]\n${turn.content}\n`, "utf-8");
-      if (i + 1 < turns.length && turns[i + 1].role === "assistant") {
-        appendFileSync(memFile, `\n[Copilot]\n${turns[i + 1].content}\n`, "utf-8");
-        i += 2;
-        continue;
-      }
-    } else {
-      appendFileSync(memFile, `[Copilot]\n${turn.content}\n`, "utf-8");
-    }
-    i++;
+function writeRollout(userMsg, assistantMsg) {
+  const path = join(tmpdir(), `memsearch-copilot-${Date.now()}.jsonl`);
+  const lines = [];
+  if (userMsg) {
+    lines.push(JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: userMsg } }));
   }
+  if (assistantMsg) {
+    lines.push(JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: assistantMsg } }));
+  }
+  writeFileSync(path, lines.join("\n") + "\n", "utf-8");
+  return path;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,15 +113,15 @@ function saveSessionToMemory(turns, memDir) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const memsearchCmd = detectMemsearchCmd();
-// projectDir/memDir/collectionName are pinned at onSessionStart and never changed
-// so turns are always written to the project the session started in.
+
+let sessionId = "";
 let projectDir = process.cwd();
-let memDir = join(projectDir, ".memsearch", "memory");
 let collectionName = "ms_copilot_default";
 let projectPinned = false;
 
-/** In-memory buffer for the current session's turns. */
-const sessionTurns = [];
+// Per-turn tracking for stop.sh (mirrors Codex's Stop hook per-turn model)
+let currentUserMsg = "";
+let currentAssistantMsg = "";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extension entry point
@@ -166,72 +129,51 @@ const sessionTurns = [];
 
 const session = await joinSession({
   hooks: {
-    onSessionStart: async (input) => {
-      // Pin project dir once at session start — never changes for this session
+    onSessionStart: async (input, invocation) => {
+      sessionId = invocation.sessionId;
+
+      // Pin project dir at session start — never re-resolved mid-session
       if (!projectPinned) {
-        const cwd = input.cwd ?? process.cwd();
-        projectDir = findGitRoot(cwd);
-        memDir = join(projectDir, ".memsearch", "memory");
-        collectionName = deriveCollectionName(projectDir);
+        projectDir = input.cwd ?? process.cwd();
         projectPinned = true;
+        collectionName = deriveCollectionName(projectDir);
       }
 
-      // Seed the buffer with the initial prompt (if the session started with one)
+      // Seed the per-turn buffer with the initial prompt so session.idle
+      // captures it even if the user.message event fires before our listener.
       if (input.initialPrompt) {
-        sessionTurns.push({
-          role: "user",
-          content: input.initialPrompt.trim(),
-          ts: input.timestamp ?? Date.now(),
-        });
+        currentUserMsg = input.initialPrompt.trim();
       }
 
-      // Ensure onnx is the default provider on first run (no API key needed)
-      const home = process.env.HOME ?? "~";
-      const globalConfig = join(home, ".memsearch", "config.toml");
-      const localConfig = join(projectDir, ".memsearch.toml");
-      if (!existsSync(globalConfig) && !existsSync(localConfig)) {
-        exec(
-          `${memsearchCmd} config set embedding.provider onnx`,
-          { timeout: 5000, env: { ...process.env, MEMSEARCH_NO_WATCH: "1" } },
-          () => {}
-        );
-      }
+      // Delegate to session-start.sh — handles watch, index, memory injection
+      const out = await runHook(
+        join(CODEX_HOOKS, "session-start.sh"),
+        null,
+        { MEMSEARCH_PROJECT_DIR: projectDir }
+      );
 
-      // Start background index if memory dir already has content
-      if (existsSync(memDir)) {
-        const child = exec(
-          `${memsearchCmd} index '${shellEscape(memDir)}' --collection ${collectionName}`,
-          { timeout: 120000, env: { ...process.env, MEMSEARCH_NO_WATCH: "1" } },
-          () => {}
-        );
-        child?.unref?.();
-      }
-
-      await session.log("[memsearch] Memory active", { ephemeral: true });
-
-      const context = getRecentMemories(memDir);
-      if (context) {
-        return {
-          additionalContext:
-            `[memsearch] Memory available. Use the memsearch_search and memsearch_expand ` +
-            `tools when the user's question could benefit from past context.\n\n${context}`,
-        };
-      }
-      return undefined;
+      // Map Codex hook output fields → Copilot CLI's additionalContext
+      const parts = [
+        out.systemMessage,
+        out.hookSpecificOutput?.additionalContext,
+      ].filter(Boolean);
+      return parts.length ? { additionalContext: parts.join("\n\n") } : undefined;
     },
 
-    onSessionEnd: async (_input) => {
-      // Use the pinned project dir — not re-resolved from end-of-session cwd
-      if (sessionTurns.length === 0) return undefined;
-      saveSessionToMemory(sessionTurns, memDir);
-      const child = exec(
-        `${memsearchCmd} index '${shellEscape(memDir)}' --collection ${collectionName}`,
-        { timeout: 120000, env: { ...process.env, MEMSEARCH_NO_WATCH: "1" } },
-        () => {}
+    onUserPromptSubmitted: async (input) => {
+      const prompt = String(input.prompt ?? "");
+      if (prompt.length < 10) return undefined;
+      currentUserMsg = prompt;
+      currentAssistantMsg = ""; // reset for this new turn
+
+      // Delegate to user-prompt-submit.sh — injects "[memsearch] Memory available"
+      const out = await runHook(
+        join(CODEX_HOOKS, "user-prompt-submit.sh"),
+        { prompt },
+        { MEMSEARCH_PROJECT_DIR: projectDir }
       );
-      // Unref so the background index doesn't block process shutdown
-      child?.unref?.();
-      return undefined;
+      const msg = out.systemMessage ?? "";
+      return msg ? { additionalContext: msg } : undefined;
     },
   },
 
@@ -248,14 +190,8 @@ const session = await joinSession({
       parameters: {
         type: "object",
         properties: {
-          query: {
-            type: "string",
-            description: "Search query — describe what you want to find",
-          },
-          top_k: {
-            type: "number",
-            description: "Number of results to return (default: 5)",
-          },
+          query: { type: "string", description: "Search query — describe what you want to find" },
+          top_k: { type: "number", description: "Number of results to return (default: 5)" },
         },
         required: ["query"],
       },
@@ -265,9 +201,7 @@ const session = await joinSession({
           exec(
             `${memsearchCmd} search '${shellEscape(args.query)}' --top-k ${topK} --json-output --collection ${collectionName}`,
             { timeout: 30000, env: { ...process.env, MEMSEARCH_NO_WATCH: "1" } },
-            (_err, stdout, stderr) => {
-              resolve(stdout || stderr || "No results found.");
-            }
+            (_err, stdout, stderr) => resolve(stdout || stderr || "No results found.")
           );
         });
       },
@@ -276,15 +210,11 @@ const session = await joinSession({
       name: "memsearch_expand",
       description:
         "Expand a memory chunk to see the full markdown section with surrounding context. " +
-        "Use after memsearch_search to get details about a specific result. " +
-        "Pass the chunk_hash value from a search result.",
+        "Use after memsearch_search to get details about a specific result.",
       parameters: {
         type: "object",
         properties: {
-          chunk_hash: {
-            type: "string",
-            description: "The chunk_hash from a search result to expand",
-          },
+          chunk_hash: { type: "string", description: "The chunk_hash from a search result to expand" },
         },
         required: ["chunk_hash"],
       },
@@ -293,9 +223,7 @@ const session = await joinSession({
           exec(
             `${memsearchCmd} expand '${shellEscape(args.chunk_hash)}' --collection ${collectionName}`,
             { timeout: 15000, env: { ...process.env, MEMSEARCH_NO_WATCH: "1" } },
-            (_err, stdout, stderr) => {
-              resolve(stdout || stderr || "No content found.");
-            }
+            (_err, stdout, stderr) => resolve(stdout || stderr || "No content found.")
           );
         });
       },
@@ -303,25 +231,59 @@ const session = await joinSession({
   ],
 });
 
-// Subscribe to turn events for capture.
-// Filter to root-session conversational turns only:
-//   - user.message: only "user" source (skip "agent", "system", "skill" sources)
-//   - assistant.message: only root assistant messages (skip those with an agentId)
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-turn capture: mirrors Codex's Stop hook
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Track the current turn's user message (skip subagent/programmatic sends)
 session.on("user.message", (event) => {
-  // Only capture messages from the actual user (not programmatic/agent sends)
   const source = event.data?.source;
   if (source && source !== "user") return;
   const content = String(event.data?.content ?? "").trim();
   if (content) {
-    sessionTurns.push({ role: "user", content, ts: Date.now() });
+    currentUserMsg = content;
+    currentAssistantMsg = "";
   }
 });
 
+// Track the current turn's assistant response (skip sub-agent messages)
 session.on("assistant.message", (event) => {
-  // Skip sub-agent messages (they have an agentId field)
   if (event.data?.agentId) return;
   const content = String(event.data?.content ?? "").trim();
-  if (content) {
-    sessionTurns.push({ role: "assistant", content, ts: Date.now() });
-  }
+  if (content) currentAssistantMsg = content;
+});
+
+// session.idle fires when the agent finishes a turn — equivalent to Codex's Stop hook.
+// Write a temp rollout file and delegate to stop.sh for LLM summarization + memory save.
+session.on("session.idle", () => {
+  if (!currentUserMsg && !currentAssistantMsg) return;
+
+  const rolloutPath = writeRollout(currentUserMsg, currentAssistantMsg);
+  const payload = JSON.stringify({
+    transcript_path: rolloutPath,
+    session_id: sessionId,
+    last_assistant_message: currentAssistantMsg,
+    stop_hook_active: false,
+  });
+
+  const capturedRollout = rolloutPath;
+  const child = exec(
+    `bash "${join(CODEX_HOOKS, "stop.sh")}"`,
+    {
+      timeout: 35000,
+      env: { ...process.env, MEMSEARCH_PROJECT_DIR: projectDir },
+    },
+    () => {
+      // stop.sh parses the rollout synchronously before spawning its async worker,
+      // so the file is safe to delete once the hook process exits.
+      try { unlinkSync(capturedRollout); } catch { /* ignore */ }
+    }
+  );
+  child.stdin.write(payload);
+  child.stdin.end();
+  child.unref(); // don't block the event loop on the stop.sh worker
+
+  // Reset for next turn
+  currentUserMsg = "";
+  currentAssistantMsg = "";
 });
