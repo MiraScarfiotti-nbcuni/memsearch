@@ -79,6 +79,7 @@ function runHook(script, stdinPayload, extraEnv = {}) {
         },
       },
       (_err, stdout) => {
+        if (_err) session.log?.(`[memsearch] hook error: ${script}: ${_err.message}`, { ephemeral: true });
         try { resolve(JSON.parse(stdout || "{}")); } catch { resolve({}); }
       }
     );
@@ -97,13 +98,18 @@ function runHook(script, stdinPayload, extraEnv = {}) {
  */
 function writeRollout(userMsg, assistantMsg) {
   const path = join(tmpdir(), `memsearch-copilot-${Date.now()}.jsonl`);
-  const lines = [];
+  // stop.sh exits early when wc -l < 3 — envelope events ensure the count is always >= 4.
+  // parse-rollout.sh uses task_started to find turn boundaries.
+  const lines = [
+    JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+  ];
   if (userMsg) {
     lines.push(JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: userMsg } }));
   }
   if (assistantMsg) {
     lines.push(JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: assistantMsg } }));
   }
+  lines.push(JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }));
   writeFileSync(path, lines.join("\n") + "\n", "utf-8");
   return path;
 }
@@ -130,7 +136,8 @@ let currentAssistantMsg = "";
 const session = await joinSession({
   hooks: {
     onSessionStart: async (input, invocation) => {
-      sessionId = invocation.sessionId;
+      // invocation may be undefined depending on SDK version — guard defensively
+      sessionId = invocation?.sessionId ?? "";
 
       // Pin project dir at session start — never re-resolved mid-session
       if (!projectPinned) {
@@ -173,7 +180,7 @@ const session = await joinSession({
         { MEMSEARCH_PROJECT_DIR: projectDir }
       );
       const msg = out.systemMessage ?? "";
-      return msg ? { additionalContext: msg } : undefined;
+      return msg ? { systemPrompt: msg } : undefined;
     },
   },
 
@@ -266,7 +273,6 @@ session.on("session.idle", () => {
     stop_hook_active: false,
   });
 
-  const capturedRollout = rolloutPath;
   const child = exec(
     `bash "${join(CODEX_HOOKS, "stop.sh")}"`,
     {
@@ -276,7 +282,7 @@ session.on("session.idle", () => {
     () => {
       // stop.sh parses the rollout synchronously before spawning its async worker,
       // so the file is safe to delete once the hook process exits.
-      try { unlinkSync(capturedRollout); } catch { /* ignore */ }
+      try { unlinkSync(rolloutPath); } catch { /* ignore */ }
     }
   );
   child.stdin.write(payload);
