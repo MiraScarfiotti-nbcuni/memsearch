@@ -14,14 +14,22 @@
 
 import { joinSession } from "@github/copilot-sdk/extension";
 import { exec, execSync, spawnSync } from "node:child_process";
-import { existsSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, realpathSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url));
+const PLUGIN_DIR = dirname(realpathSync(fileURLToPath(import.meta.url)));
 const CODEX_HOOKS = join(PLUGIN_DIR, "..", "codex", "hooks");
 const COPILOT_SCRIPTS = join(PLUGIN_DIR, "scripts");
+
+if (!existsSync(CODEX_HOOKS)) {
+  throw new Error(
+    `[memsearch] Codex hooks not found at ${CODEX_HOOKS}. ` +
+    `The extension must be symlinked, not copied. ` +
+    `Run: bash <repo>/plugins/copilot-cli/scripts/install.sh`
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Minimal helpers needed only for the JS tool handlers
