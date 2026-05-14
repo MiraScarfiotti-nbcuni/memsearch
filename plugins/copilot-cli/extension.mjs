@@ -151,7 +151,12 @@ const session = await joinSession({
       if (!projectPinned) {
         projectDir = input.cwd ?? process.cwd();
         projectPinned = true;
-        collectionName = deriveCollectionName(projectDir);
+        // Mirror codex common.sh: when MEMSEARCH_DIR is explicitly set, derive the
+        // collection from that directory so tool handlers and hooks share the same scope.
+        const explicitMemsearchDir = process.env.MEMSEARCH_DIR;
+        collectionName = explicitMemsearchDir
+          ? deriveCollectionName(explicitMemsearchDir)
+          : deriveCollectionName(projectDir);
       }
 
       // Seed the per-turn buffer with the initial prompt so session.idle
