@@ -106,7 +106,7 @@ result = subprocess.run(
 
 The isolated `XDG_CONFIG_HOME` contains a copy of `opencode.json` (for provider/model config) but **no `plugins/` directory** -- so the memsearch plugin doesn't load in the summarization subprocess. The `MEMSEARCH_NO_WATCH` env var provides an additional guard.
 
-The daemon also reads `small_model` from `opencode.json` config, using a lighter model for summarization when available.
+The daemon also reads `small_model` from `opencode.json` config, using a lighter model for summarization when available. Set `plugins.opencode.summarize.model` to override only this capture model; empty or unset keeps the current `small_model` / plugin default behavior. This setting does not fall back to `llm.model`.
 
 ### Daemon Self-Management
 
@@ -192,7 +192,7 @@ The `<!-- session:... db:~/.local/share/opencode/opencode.db -->` anchors are us
 | **Summarizer** | `opencode run` (isolated) | `claude -p --model haiku` | `openclaw agent --local` | `codex exec` (isolated) |
 | **L3 source** | OpenCode SQLite DB | Claude Code JSONL | OpenClaw JSONL | Codex rollout JSONL |
 | **Recall trigger** | Tool-based (LLM decides) | Skill in forked subagent (`context: fork`) | Tool-based (LLM decides) | Skill-based (main context) |
-| **Install** | npm + opencode.json | Plugin marketplace | `openclaw plugins install` | `install.sh` + hooks.json |
+| **Install** | npm + opencode.json | Plugin marketplace | `openclaw plugins install --force` + hook permissions | `install.sh` + hooks.json |
 | **Recursion prevention** | XDG_CONFIG_HOME isolation | `CLAUDECODE=` env var | `MEMSEARCH_NO_WATCH` flag | Isolated CODEX_HOME |
 
 ---

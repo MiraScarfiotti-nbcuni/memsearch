@@ -73,6 +73,18 @@ def test_large_section_flushes_rolled_back_tail_line() -> None:
     assert chunks[-1].end_line >= chunks[-1].start_line
 
 
+def test_large_section_splits_long_line_after_forced_line_boundary() -> None:
+    """A long line carried forward by rollback should not emit an oversized chunk."""
+    max_size = 1500
+    md = "\n".join(["short", "x" * 9500, "tail"])
+
+    chunks = chunk_markdown(md, source="long-line.md", max_chunk_size=max_size)
+
+    assert len(chunks) > 1
+    assert all(len(chunk.content) <= max_size for chunk in chunks)
+    assert any("tail" in chunk.content for chunk in chunks)
+
+
 def test_source_and_lines():
     md = "# A\n\nline1\n\n# B\n\nline2"
     chunks = chunk_markdown(md, source="doc.md")

@@ -173,6 +173,16 @@ def _split_large_section(
                 )
             )
 
+    def _emit_bounded(content: str, start_line: int, end_line: int) -> None:
+        content = content.strip()
+        if not content:
+            return
+        if len(content) > max_size:
+            for part in _split_long_text(content, max_size):
+                _emit(part.strip(), start_line, end_line)
+        else:
+            _emit(content, start_line, end_line)
+
     for i, line in enumerate(lines):
         current_lines.append(line)
         text = "\n".join(current_lines)
@@ -182,7 +192,7 @@ def _split_large_section(
 
         # Preferred: split at paragraph boundary
         if len(text) >= max_size and is_paragraph_break:
-            _emit(text.strip(), base_line + current_start + 1, base_line + i + 1)
+            _emit_bounded(text, base_line + current_start + 1, base_line + i + 1)
             overlap_start = max(0, len(current_lines) - overlap)
             current_lines = current_lines[overlap_start:]
             current_start = i + 1 - len(current_lines)
@@ -194,7 +204,7 @@ def _split_large_section(
         if len(text) >= max_size and not is_paragraph_break and len(current_lines) > 1:
             current_lines.pop()
             content = "\n".join(current_lines).strip()
-            _emit(content, base_line + current_start + 1, base_line + i)
+            _emit_bounded(content, base_line + current_start + 1, base_line + i)
             overlap_start = max(0, len(current_lines) - overlap)
             current_lines = current_lines[overlap_start:]
             current_lines.append(line)  # re-add the rolled-back line
@@ -205,17 +215,13 @@ def _split_large_section(
         if len(text) >= max_size and len(current_lines) == 1:
             sub_chunks = _split_long_text(text, max_size)
             for part in sub_chunks:
-                _emit(
-                    part.strip(),
-                    base_line + current_start + 1,
-                    base_line + i + 1,
-                )
+                _emit(part.strip(), base_line + current_start + 1, base_line + i + 1)
             current_lines = []
             current_start = i + 1
             continue
 
         if is_last_line:
-            _emit(text.strip(), base_line + current_start + 1, base_line + i + 1)
+            _emit_bounded(text, base_line + current_start + 1, base_line + i + 1)
             current_lines = []
 
     # Flush any remaining content (e.g. a rolled-back line from the last
@@ -225,11 +231,7 @@ def _split_large_section(
         if remaining:
             end_line = base_line + len(lines)
             start_line = base_line + current_start + 1
-            if len(remaining) > max_size:
-                for part in _split_long_text(remaining, max_size):
-                    _emit(part.strip(), start_line, end_line)
-            else:
-                _emit(remaining, start_line, end_line)
+            _emit_bounded(remaining, start_line, end_line)
 
     return chunks
 

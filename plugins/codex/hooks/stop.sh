@@ -102,24 +102,32 @@ run_worker() {
 Here is the transcript:
 
 ${CONTENT}"
+    local SUMMARIZE_MODEL="gpt-5.1-codex-mini"
+    if [ -n "$MEMSEARCH_CMD" ]; then
+      local CONFIG_MODEL
+      CONFIG_MODEL=$($MEMSEARCH_CMD config get plugins.codex.summarize.model 2>/dev/null || true)
+      if [ -n "$CONFIG_MODEL" ]; then
+        SUMMARIZE_MODEL="$CONFIG_MODEL"
+      fi
+    fi
 
     if command -v timeout &>/dev/null; then
       SUMMARY=$(MEMSEARCH_NO_WATCH=1 MEMSEARCH_IN_STOP_WORKER=1 timeout 30 codex exec \
         --ephemeral \
         --skip-git-repo-check \
         -s read-only \
-        -c features.codex_hooks=false \
+        -c features.hooks=false \
         -c model_reasoning_effort='"low"' \
-        -m gpt-5.1-codex-mini \
+        -m "$SUMMARIZE_MODEL" \
         "$LLM_PROMPT" 2>/dev/null || true)
     else
       SUMMARY=$(MEMSEARCH_NO_WATCH=1 MEMSEARCH_IN_STOP_WORKER=1 codex exec \
         --ephemeral \
         --skip-git-repo-check \
         -s read-only \
-        -c features.codex_hooks=false \
+        -c features.hooks=false \
         -c model_reasoning_effort='"low"' \
-        -m gpt-5.1-codex-mini \
+        -m "$SUMMARIZE_MODEL" \
         "$LLM_PROMPT" 2>/dev/null || true)
     fi
   fi
@@ -170,7 +178,7 @@ fi
 source "$SCRIPT_DIR/common.sh"
 
 # Defense-in-depth against recursion: the worker's `codex exec` passes
-# `features.codex_hooks=false`, but if a future build ignores that flag the
+# `features.hooks=false`, but if a future build ignores that flag the
 # nested Stop hook would spawn another worker. MEMSEARCH_IN_STOP_WORKER is
 # exported across the exec boundary so the nested invocation no-ops here.
 if [ -n "${MEMSEARCH_IN_STOP_WORKER:-}" ]; then
